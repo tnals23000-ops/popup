@@ -1,0 +1,1095 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>팝업 재고 관리</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: Arial, "Noto Sans KR", sans-serif; }
+    .btn-touch { min-height: 48px; font-size: 16px; }
+    .tab-btn { min-height: 52px; font-size: 15px; }
+    .input-touch { min-height: 48px; font-size: 16px; }
+    .chip { min-height: 44px; font-size: 14px; }
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 20px;
+      transform: translateX(-50%);
+      z-index: 1000;
+      max-width: 92%;
+      padding: 12px 16px;
+      border-radius: 12px;
+      color: #fff;
+      font-size: 14px;
+    }
+    mark { background: #fde68a; padding: 0 2px; }
+    .suggest-box {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: calc(100% + 6px);
+      z-index: 20;
+      max-height: 220px;
+      overflow: auto;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+  <div class="max-w-6xl mx-auto px-3 py-4">
+    <header class="bg-white border border-slate-200 rounded-2xl p-4 mb-4">
+      <div class="flex flex-col lg:flex-row gap-4 items-start">
+        <div class="flex-1 min-w-0">
+          <h1 class="text-2xl font-bold mb-2">팝업 재고 관리</h1>
+          <p class="text-sm text-slate-600 mb-2">상품등록 / 재고조회 / 상품이동(창고-매장) / 현황 기준으로 운영합니다.</p>
+          <div class="text-xs text-slate-500 break-all">API: <span id="api-url-text">https://tale-probability-representative-auditor.trycloudflare.com</span></div>
+          <button type="button" id="help-toggle" class="btn-touch mt-3 px-3 py-2 text-sm bg-slate-100 rounded-lg border border-slate-200">도움말 보기/숨기기</button>
+        </div>
+        <div class="w-full lg:w-auto flex flex-col items-center">
+          <img
+            src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=https://tale-probability-representative-auditor.trycloudflare.com"
+            alt="API QR"
+            class="w-[140px] h-[140px] border border-slate-200 rounded-lg bg-white"
+          />
+          <div class="text-xs text-slate-500 mt-2">앱/API 접속 QR</div>
+        </div>
+      </div>
+      <div id="help-box" class="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-700 space-y-2 hidden">
+        <p>이 시스템은 <b>창고 ↔ 매장 이동/배치 관리</b>에 초점을 둡니다.</p>
+        <p>대표 구역은 <b>창고</b>, <b>매장</b>, <b>미배치</b> 3가지이며, 세부 위치는 예를 들어 <b>22-반팔-수민-A</b>처럼 입력합니다.</p>
+        <p>배치/이동 시에는 기준값(창고/매장)과 상세 위치를 조합해 <b>창고-22-반팔-수민-A</b>, <b>매장-22-반팔-수민-A</b>처럼 사용합니다.</p>
+      </div>
+    </header>
+
+    <div id="import-banner" class="mb-4 bg-emerald-50 border border-emerald-200 rounded-2xl p-3 text-sm">
+      <div class="flex items-start gap-2">
+        <span class="text-emerald-600 text-base">✅</span>
+        <div class="flex-1">
+          <div class="font-semibold text-emerald-800">위치명에 '창고-' 접두사 일괄 적용 완료 ✅</div>
+          <div class="text-emerald-700 text-xs mt-1">
+            상품 <b>587</b>건 / 총 재고 <b>1,542</b>개 · 배치 <b>923</b> · 미지정 <b>619</b> · 위치 <b>39</b>개(+미지정) · mismatch <b>0</b> ·
+            stock_by_location 376행 · location_assignments 116행 · transactions 1,304행 갱신 ·
+            핵심 합계 일치(창고‑21‑반팔‑세빈‑A 45 / 창고‑22‑반팔‑세빈‑B 34 / 창고‑22‑반팔‑수민‑A 37 / 창고‑22‑반팔‑수민‑B 17 / 창고‑22‑반팔‑호은‑B 46 / 창고‑24‑반팔‑형우‑C 55) ·
+            DB 백업: popup.db.backup_prefix_075155
+          </div>
+        </div>
+        <button type="button" onclick="document.getElementById('import-banner').classList.add('hidden')" class="text-emerald-700 text-lg leading-none">×</button>
+      </div>
+    </div>
+
+    <datalist id="location-list"></datalist>
+
+    <nav class="grid grid-cols-4 gap-2 mb-4">
+      <button type="button" class="tab-btn rounded-xl border border-slate-200 bg-white font-semibold" data-tab="register">📦 상품등록</button>
+      <button type="button" class="tab-btn rounded-xl border border-slate-200 bg-white font-semibold" data-tab="search">🔍 재고조회</button>
+      <button type="button" class="tab-btn rounded-xl border border-slate-200 bg-white font-semibold" data-tab="move">🔄 상품이동(창고-매장)</button>
+      <button type="button" class="tab-btn rounded-xl border border-slate-200 bg-white font-semibold" data-tab="stats">📊 현황</button>
+    </nav>
+
+    <!-- 등록 -->
+    <section id="tab-register" class="tab-panel">
+      <div class="grid lg:grid-cols-2 gap-4">
+        <div class="bg-white border border-slate-200 rounded-2xl p-4">
+          <h2 class="text-lg font-bold mb-3">상품등록</h2>
+
+          <label class="block text-sm text-slate-600 mb-1">기준 위치</label>
+          <div class="flex flex-wrap gap-2 mb-3">
+            <button type="button" class="chip px-3 rounded-full bg-slate-100 border border-slate-200" data-base-target="register-base" data-base-value="창고">창고</button>
+            <button type="button" class="chip px-3 rounded-full bg-slate-100 border border-slate-200" data-base-target="register-base" data-base-value="매장">매장</button>
+          </div>
+
+          <label class="block text-sm text-slate-600 mb-1">상세 위치</label>
+          <div class="relative">
+            <input id="register-detail" class="input-touch w-full border border-slate-300 rounded-xl px-4 mb-2" autocomplete="off" placeholder="일부 입력 후 선택 또는 신규 입력 (예: 22-반팔-수민-A)" />
+            <div id="register-suggest" class="suggest-box hidden bg-white border border-slate-200 rounded-xl shadow-sm"></div>
+          </div>
+          <div class="text-xs text-slate-500 mb-3">기존 위치는 검색 후 선택, 신규 위치는 그대로 입력해서 등록할 수 있습니다.</div>
+
+          <div class="mb-3 text-sm">
+            <span class="text-slate-500">저장 위치:</span>
+            <span id="register-location-preview" class="font-semibold">창고</span>
+          </div>
+
+          <label class="block text-sm text-slate-600 mb-1">바코드</label>
+          <input id="register-barcode" class="input-touch w-full border border-slate-300 rounded-xl px-4 mb-3" placeholder="바코드 입력" />
+
+          <label class="block text-sm text-slate-600 mb-1">수량</label>
+          <input id="register-qty" type="number" inputmode="numeric" min="1" value="1" class="input-touch w-full border border-slate-300 rounded-xl px-4 mb-4" />
+
+          <div class="flex gap-2">
+            <button type="button" id="register-add" class="btn-touch flex-1 rounded-xl bg-slate-900 text-white font-semibold">대기열 추가</button>
+            <button type="button" id="register-save" class="btn-touch flex-1 rounded-xl bg-emerald-600 text-white font-semibold">저장</button>
+          </div>
+        </div>
+
+        <div class="bg-white border border-slate-200 rounded-2xl p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-lg font-bold">상품등록 대기열</h3>
+            <button type="button" id="register-clear" class="btn-touch px-3 rounded-lg bg-slate-100 border border-slate-200">전체 비우기</button>
+          </div>
+          <div class="text-sm text-slate-600 mb-3">
+            총 <span id="register-kind-count" class="font-bold">0</span>종 / 총 <span id="register-total-qty" class="font-bold">0</span>개
+          </div>
+          <div id="register-queue" class="space-y-2"></div>
+          <div id="register-empty" class="text-sm text-slate-400 py-8 text-center">대기열이 비어 있습니다.</div>
+
+          <div class="mt-6 border-t border-slate-200 pt-4">
+            <h3 class="text-lg font-bold mb-2">재고 추가</h3>
+            <p class="text-sm text-slate-600 mb-4">새로 확인된 재고를 현재 수량에 더합니다.</p>
+
+            <label class="block text-sm text-slate-600 mb-1">기준 위치</label>
+            <div class="flex flex-wrap gap-2 mb-3">
+              <button type="button" class="chip px-3 rounded-full bg-slate-100 border border-slate-200" data-base-target="add-base" data-base-value="창고">창고</button>
+              <button type="button" class="chip px-3 rounded-full bg-slate-100 border border-slate-200" data-base-target="add-base" data-base-value="매장">매장</button>
+              <button type="button" class="chip px-3 rounded-full bg-slate-100 border border-slate-200" data-base-target="add-base" data-base-value="미배치">미배치</button>
+            </div>
+
+            <label class="block text-sm text-slate-600 mb-1">상세 위치</label>
+            <input id="add-detail" class="input-touch w-full border border-slate-300 rounded-xl px-4 mb-3" list="location-list" placeholder="예: 기본" />
+
+            <div class="mb-3 text-sm">
+              <span class="text-slate-500">추가 위치:</span>
+              <span id="add-location-preview" class="font-semibold">창고-기본</span>
+            </div>
+
+            <label class="block text-sm text-slate-600 mb-1">바코드</label>
+            <input id="add-barcode" class="input-touch w-full border border-slate-300 rounded-xl px-4 mb-3" placeholder="바코드 입력" />
+
+            <label class="block text-sm text-slate-600 mb-1">수량</label>
+            <input id="add-qty" type="number" inputmode="numeric" min="1" value="1" class="input-touch w-full border border-slate-300 rounded-xl px-4 mb-3" />
+
+            <label class="block text-sm text-slate-600 mb-1">메모</label>
+            <input id="add-memo" class="input-touch w-full border border-slate-300 rounded-xl px-4 mb-4" placeholder="메모(선택)" />
+
+            <button type="button" id="add-submit" class="btn-touch w-full rounded-xl bg-emerald-600 text-white font-semibold">재고 추가 처리</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 조회 -->
+    <section id="tab-search" class="tab-panel hidden">
+      <div class="bg-white border border-slate-200 rounded-2xl p-4">
+        <div class="flex items-center gap-3 mb-3">
+          <h2 class="text-lg font-bold">재고조회</h2>
+          <div id="search-loading" class="hidden text-sm text-slate-500">불러오는 중...</div>
+        </div>
+        <input id="search-input" class="input-touch w-full border border-slate-300 rounded-xl px-4 mb-3" placeholder="상품명 / 바코드 / 위치 검색 (예: 22-반팔-수민-)" />
+        <div class="text-sm text-slate-600 mb-4">상품명, 바코드, 위치를 한 번에 검색합니다. 예: HEART / FW21-HD04WHS / 창고-22-반팔-수민-A / 매장-22-반팔-수민-A</div>
+        <div id="search-summary" class="text-sm text-slate-700 mb-3"></div>
+        <div id="search-results" class="grid grid-cols-1 md:grid-cols-2 gap-3"></div>
+        <div class="mt-4 text-center">
+          <button type="button" id="search-more" class="hidden btn-touch px-6 rounded-xl bg-slate-100 border border-slate-200">더 보기</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 이동 -->
+    <section id="tab-move" class="tab-panel hidden">
+      <div class="bg-white border border-slate-200 rounded-2xl p-4 mb-4">
+        <h2 class="text-lg font-bold mb-2">상품이동(창고-매장)</h2>
+        <p class="text-sm text-slate-600">등록과 같은 방식으로, <b>현재 위치</b>와 <b>이동 위치</b>를 먼저 정한 뒤 바코드를 읽습니다.</p>
+      </div>
+
+      <div class="grid lg:grid-cols-2 gap-4 mb-4">
+        <div class="bg-white border border-slate-200 rounded-2xl p-4">
+          <h3 class="text-lg font-bold mb-3">현재 위치</h3>
+          <div class="flex gap-2 mb-3">
+            <button type="button" class="btn-touch flex-1 rounded-xl border border-slate-300 bg-white font-semibold" data-base-target="move-from-base" data-base-value="창고">창고</button>
+            <button type="button" class="btn-touch flex-1 rounded-xl border border-slate-300 bg-white font-semibold" data-base-target="move-from-base" data-base-value="매장">매장</button>
+          </div>
+          <div class="relative">
+            <input id="move-from-detail" class="input-touch w-full border border-slate-300 rounded-xl px-4 mb-2" autocomplete="off" placeholder="일부 입력 후 선택 (예: 22-반팔-수민)" />
+            <div id="move-from-suggest" class="suggest-box hidden bg-white border border-slate-200 rounded-xl shadow-sm"></div>
+          </div>
+          <div class="text-xs text-slate-500 mb-2">일부 값만 입력해도 검색 결과가 나오며, 목록에서 선택해 주세요.</div>
+          <div class="text-sm text-slate-600">현재 위치: <span id="move-from-preview" class="font-semibold">창고-불량</span></div>
+        </div>
+
+        <div class="bg-white border border-slate-200 rounded-2xl p-4">
+          <h3 class="text-lg font-bold mb-3">이동 위치</h3>
+          <div class="flex gap-2 mb-3">
+            <button type="button" class="btn-touch flex-1 rounded-xl border border-slate-300 bg-white font-semibold" data-base-target="move-to-base" data-base-value="창고">창고</button>
+            <button type="button" class="btn-touch flex-1 rounded-xl border border-slate-300 bg-white font-semibold" data-base-target="move-to-base" data-base-value="매장">매장</button>
+          </div>
+          <div class="relative">
+            <input id="move-to-detail" class="input-touch w-full border border-slate-300 rounded-xl px-4 mb-2" autocomplete="off" placeholder="일부 입력 후 선택 (예: 22-반팔-수민)" />
+            <div id="move-to-suggest" class="suggest-box hidden bg-white border border-slate-200 rounded-xl shadow-sm"></div>
+          </div>
+          <div class="text-xs text-slate-500 mb-2">일부 값만 입력해도 검색 결과가 나오며, 목록에서 선택해 주세요.</div>
+          <div class="text-sm text-slate-600">이동 위치: <span id="move-to-preview" class="font-semibold">매장-기본</span></div>
+        </div>
+      </div>
+
+      <div class="grid lg:grid-cols-2 gap-4">
+        <div class="bg-white border border-slate-200 rounded-2xl p-4">
+          <label class="block text-sm text-slate-600 mb-1">바코드</label>
+          <div class="flex gap-2 mb-3">
+            <input id="move-barcode" class="input-touch flex-1 border border-slate-300 rounded-xl px-4" placeholder="바코드 입력" />
+            <button type="button" id="move-load" class="btn-touch px-4 rounded-xl bg-slate-900 text-white font-semibold">조회</button>
+          </div>
+
+          <label class="block text-sm text-slate-600 mb-1">수량</label>
+          <input id="move-qty" type="number" inputmode="numeric" min="1" value="1" class="input-touch w-full border border-slate-300 rounded-xl px-4 mb-3" />
+
+          <label class="block text-sm text-slate-600 mb-1">메모</label>
+          <input id="move-memo" class="input-touch w-full border border-slate-300 rounded-xl px-4 mb-4" placeholder="메모(선택)" />
+
+          <button type="button" id="move-submit" class="btn-touch w-full rounded-xl bg-blue-600 text-white font-semibold">상품이동 완료</button>
+        </div>
+
+        <div class="bg-white border border-slate-200 rounded-2xl p-4">
+          <h3 class="text-lg font-bold mb-3">현재 위치별 보관 수량</h3>
+          <div id="move-product-box" class="space-y-2 text-sm text-slate-700">
+            <div class="text-slate-400 py-8 text-center">바코드를 조회하면 위치별 보관 수량이 표시됩니다.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 현황 -->
+    <section id="tab-stats" class="tab-panel hidden">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-bold">현황</h2>
+        <div class="flex gap-2">
+          <button type="button" id="stats-refresh" class="btn-touch px-4 rounded-xl bg-slate-100 border border-slate-200">새로고침</button>
+          <a href="https://tale-probability-representative-auditor.trycloudflare.com/api/export" target="_blank" rel="noopener" class="btn-touch px-4 rounded-xl bg-slate-900 text-white inline-flex items-center">CSV 다운로드</a>
+        </div>
+      </div>
+      <div id="stats-cards" class="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-4"></div>
+      <div class="grid lg:grid-cols-2 gap-4">
+        <div class="bg-white border border-slate-200 rounded-2xl p-4">
+          <h3 class="text-lg font-bold mb-3">불일치 목록</h3>
+          <div id="mismatch-list" class="space-y-2 text-sm"></div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-2xl p-4">
+          <h3 class="text-lg font-bold mb-3">위치 요약</h3>
+          <div id="location-summary" class="space-y-2 text-sm"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div id="toast-wrap"></div>
+
+  <!-- 인라인 매장이동 모달 -->
+  <div id="store-pick-modal" class="fixed inset-0 z-40 hidden">
+    <div class="absolute inset-0 bg-black/40" data-store-modal-close="1"></div>
+    <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-sm bg-white rounded-2xl shadow-xl p-4">
+      <h3 class="text-base font-bold mb-2">매장 위치 선택</h3>
+      <div id="store-pick-summary" class="text-sm text-slate-600 mb-3"></div>
+      <div id="store-pick-list" class="space-y-2 max-h-60 overflow-auto mb-3"></div>
+      <div class="border-t border-slate-200 pt-3 mb-3">
+        <label class="block text-xs text-slate-500 mb-1">또는 새 매장 위치 직접 입력 (자동으로 "매장-" 접두사 추가)</label>
+        <input id="store-pick-new" class="input-touch w-full border border-slate-300 rounded-xl px-3" placeholder="예: 세빈-A" />
+      </div>
+      <div class="flex gap-2">
+        <button type="button" id="store-pick-cancel" class="btn-touch flex-1 rounded-xl bg-slate-100 text-slate-700 font-semibold">취소</button>
+        <button type="button" id="store-pick-confirm" class="btn-touch flex-1 rounded-xl bg-blue-600 text-white font-semibold">이동 실행</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      const BASE_URL = 'https://tale-probability-representative-auditor.trycloudflare.com';
+      const state = {
+        placementQueue: [],
+        searchLimit: 50,
+        searchKeyword: '',
+        stats: null,
+        registerBase: '창고',
+        addBase: '창고',
+        moveFromBase: '창고',
+        moveToBase: '매장',
+        locationList: [],
+        moveProductLocations: []
+      };
+
+      function escapeHtml(value) {
+        return String(value ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function fmtNumber(v) {
+        const n = Number(v ?? 0);
+        if (Number.isNaN(n)) return '-';
+        return n.toLocaleString('ko-KR');
+      }
+
+      function vibrate() {
+        if (navigator.vibrate) navigator.vibrate(30);
+      }
+
+      function showToast(message, type = 'info') {
+        const colors = {
+          info: 'bg-slate-900',
+          success: 'bg-emerald-600',
+          error: 'bg-red-600',
+          warn: 'bg-amber-500'
+        };
+        const el = document.createElement('div');
+        el.className = `toast ${colors[type] || colors.info}`;
+        el.textContent = message;
+        document.getElementById('toast-wrap').appendChild(el);
+        setTimeout(() => el.remove(), 2600);
+      }
+
+      async function fetchJSON(url, options = {}) {
+        const res = await fetch(url, options);
+        const text = await res.text();
+        let data = null;
+        try { data = text ? JSON.parse(text) : null; } catch (e) {}
+        if (!res.ok) {
+          throw new Error(data?.message || `요청 실패 (${res.status})`);
+        }
+        return data;
+      }
+
+      function combineLocation(base, detail) {
+        const b = String(base || '').trim();
+        const d = String(detail || '').trim();
+        if (!b) return d;
+        if (!d) return b;
+        return `${b}-${d}`;
+      }
+
+      function debounce(fn, delay) {
+        let t = null;
+        return function (...args) {
+          clearTimeout(t);
+          t = setTimeout(() => fn.apply(this, args), delay);
+        };
+      }
+
+      function highlight(text, keyword) {
+        const value = String(text ?? '');
+        if (!keyword) return escapeHtml(value);
+        const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp(`(${escaped})`, 'ig');
+        return escapeHtml(value).replace(re, '<mark>$1</mark>');
+      }
+
+      function setActiveTab(tab) {
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+          const active = btn.dataset.tab === tab;
+          btn.classList.toggle('bg-slate-900', active);
+          btn.classList.toggle('text-white', active);
+          btn.classList.toggle('bg-white', !active);
+        });
+        document.querySelectorAll('.tab-panel').forEach(panel => {
+          panel.classList.toggle('hidden', panel.id !== `tab-${tab}`);
+        });
+      }
+
+      function refreshLocationPreviews() {
+        const registerDetail = document.getElementById('register-detail').value;
+        document.getElementById('register-location-preview').textContent = combineLocation(state.registerBase, registerDetail);
+
+        const addDetail = document.getElementById('add-detail').value || (state.addBase === '창고' ? '기본' : '');
+        document.getElementById('add-location-preview').textContent = combineLocation(state.addBase, addDetail);
+
+        const moveFromDetail = document.getElementById('move-from-detail').value || '불량';
+        const moveToDetail = document.getElementById('move-to-detail').value || '기본';
+        document.getElementById('move-from-preview').textContent = combineLocation(state.moveFromBase, moveFromDetail);
+        document.getElementById('move-to-preview').textContent = combineLocation(state.moveToBase, moveToDetail);
+      }
+
+      function stripBase(location, base) {
+        const prefix = `${base}-`;
+        if (String(location || '').startsWith(prefix)) return String(location).slice(prefix.length);
+        return String(location || '');
+      }
+
+      function getRegisterLocationPool() {
+        const set = new Set();
+        state.locationList.forEach(loc => {
+          if (!loc || loc === '미지정' || loc === '미배치') return;
+          if (String(loc).startsWith(`${state.registerBase}-`)) set.add(stripBase(loc, state.registerBase));
+        });
+        return [...set];
+      }
+
+      function renderRegisterSuggestions() {
+        const input = document.getElementById('register-detail');
+        const box = document.getElementById('register-suggest');
+        const q = input.value.trim().toLowerCase();
+        const rows = getRegisterLocationPool().filter(v => !q || v.toLowerCase().includes(q)).slice(0, 12);
+        if (!rows.length) {
+          box.classList.add('hidden');
+          box.innerHTML = '';
+          return;
+        }
+        box.innerHTML = rows.map(v => `<button type="button" class="w-full text-left px-3 py-2 hover:bg-slate-50 border-b last:border-b-0 border-slate-100" data-register-pick="${escapeHtml(v)}">${highlight(v, q)}</button>`).join('');
+        box.classList.remove('hidden');
+      }
+
+      function getMoveLocationPool(kind) {
+        const base = kind === 'from' ? state.moveFromBase : state.moveToBase;
+        const source = kind === 'from' && state.moveProductLocations.length ? state.moveProductLocations : state.locationList;
+        const set = new Set();
+        source.forEach(loc => {
+          if (!loc || loc === '미지정' || loc === '미배치') return;
+          if (String(loc).startsWith(`${base}-`)) set.add(stripBase(loc, base));
+        });
+        return [...set];
+      }
+
+      function renderMoveSuggestions(kind) {
+        const input = document.getElementById(kind === 'from' ? 'move-from-detail' : 'move-to-detail');
+        const box = document.getElementById(kind === 'from' ? 'move-from-suggest' : 'move-to-suggest');
+        const q = input.value.trim().toLowerCase();
+        const rows = getMoveLocationPool(kind).filter(v => !q || v.toLowerCase().includes(q)).slice(0, 12);
+        if (!rows.length) {
+          box.classList.add('hidden');
+          box.innerHTML = '';
+          return;
+        }
+        box.innerHTML = rows.map(v => `<button type="button" class="w-full text-left px-3 py-2 hover:bg-slate-50 border-b last:border-b-0 border-slate-100" data-move-pick="${kind}" data-value="${escapeHtml(v)}">${highlight(v, q)}</button>`).join('');
+        box.classList.remove('hidden');
+      }
+
+      function hideMoveSuggestions() {
+        ['move-from-suggest','move-to-suggest'].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.classList.add('hidden');
+        });
+      }
+
+      function hideRegisterSuggestions() {
+        const el = document.getElementById('register-suggest');
+        if (el) el.classList.add('hidden');
+      }
+
+      function isKnownMoveLocation(kind, detail) {
+        const base = kind === 'from' ? state.moveFromBase : state.moveToBase;
+        const full = combineLocation(base, detail);
+        const source = kind === 'from' && state.moveProductLocations.length ? state.moveProductLocations : state.locationList;
+        return source.includes(full);
+      }
+
+      function renderBaseButtons() {
+        document.querySelectorAll('[data-base-target]').forEach(btn => {
+          const target = btn.dataset.baseTarget;
+          const value = btn.dataset.baseValue;
+          const current =
+            target === 'register-base' ? state.registerBase :
+            target === 'add-base' ? state.addBase :
+            target === 'move-from-base' ? state.moveFromBase :
+            state.moveToBase;
+          btn.classList.toggle('bg-slate-900', current === value);
+          btn.classList.toggle('text-white', current === value);
+          btn.classList.toggle('bg-white', current !== value);
+        });
+      }
+
+      function renderPlacementQueue() {
+        const list = document.getElementById('register-queue');
+        const empty = document.getElementById('register-empty');
+        document.getElementById('register-kind-count').textContent = state.placementQueue.length;
+        document.getElementById('register-total-qty').textContent = state.placementQueue.reduce((sum, item) => sum + Number(item.qty || 0), 0);
+        list.innerHTML = '';
+
+        if (!state.placementQueue.length) {
+          empty.classList.remove('hidden');
+          return;
+        }
+        empty.classList.add('hidden');
+
+        state.placementQueue.forEach((item, index) => {
+          const row = document.createElement('div');
+          row.className = 'border border-slate-200 rounded-xl p-3 flex items-center justify-between gap-3';
+          row.innerHTML = `
+            <div class="min-w-0">
+              <div class="font-semibold break-all">${escapeHtml(item.barcode)}</div>
+              <div class="text-sm text-slate-500">수량 ${fmtNumber(item.qty)}</div>
+            </div>
+            <button type="button" class="btn-touch px-3 rounded-lg bg-red-50 text-red-700 border border-red-200" data-remove-index="${index}">삭제</button>
+          `;
+          list.appendChild(row);
+        });
+      }
+
+      // 위치별 보관 수량을 인라인 매장이동 컨트롤이 포함된 행으로 렌더
+      function renderStockByLocation(list, barcode) {
+        if (!Array.isArray(list) || !list.length) {
+          return '<div class="text-sm text-slate-400">위치 정보 없음</div>';
+        }
+        const safeBc = escapeHtml(String(barcode || ''));
+        return `
+          <div class="space-y-2 mt-2">
+            ${list.map((item, idx) => {
+              const loc = item.location || '';
+              const qty = Number(item.qty) || 0;
+              const isUnassigned = loc === '미지정';
+              const isStore = String(loc).startsWith('매장-');
+              const movable = !isUnassigned && !isStore && qty > 0;
+              const displayLoc = isUnassigned ? '미배치' : loc;
+              const rowId = `loc-row-${idx}-${Math.random().toString(36).slice(2,7)}`;
+              return `
+                <div id="${rowId}" class="flex items-center gap-2 text-sm border border-slate-100 rounded-lg p-2 bg-slate-50">
+                  <span class="flex-1 min-w-0 truncate font-medium" title="${escapeHtml(loc)}">${escapeHtml(displayLoc)}</span>
+                  ${movable ? `
+                    <input type="number" min="1" max="${qty}" value="1"
+                      class="move-qty-input w-16 h-9 text-center border border-slate-300 rounded-md text-sm"
+                      data-barcode="${safeBc}" data-from="${escapeHtml(loc)}" data-max="${qty}" />
+                    <button type="button"
+                      class="move-to-store-btn px-2 h-9 rounded-md bg-blue-600 text-white text-xs font-semibold whitespace-nowrap"
+                      data-barcode="${safeBc}" data-from="${escapeHtml(loc)}" data-max="${qty}" data-row="${rowId}">매장이동</button>
+                  ` : `
+                    <span class="text-xs text-slate-400 px-2">${isStore ? '매장' : (isUnassigned ? '미배치' : '-')}</span>
+                  `}
+                  <span class="font-bold text-slate-900 w-12 text-right">${fmtNumber(qty)}</span>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        `;
+      }
+
+      function renderSearchResults(items, keyword) {
+        const wrap = document.getElementById('search-results');
+        wrap.innerHTML = '';
+        if (!items.length) {
+          wrap.innerHTML = '<div class="col-span-full text-center text-slate-400 py-10">검색 결과가 없습니다.</div>';
+          return;
+        }
+
+        items.forEach(item => {
+          const locations = item.stockByLocation || [];
+          const locationCount = item.locationCount || locations.length;
+          const currentLoc = item.current?.location || item.current_location || item.topLocation || '미배치';
+          const mismatch = item.mismatch
+            ? `<span class="inline-flex px-2 py-1 text-xs rounded-full bg-amber-50 text-amber-700 border border-amber-200">불일치</span>`
+            : '';
+          const spreadBadge = locationCount > 1
+            ? `<span class="inline-flex px-2 py-1 text-xs rounded-full bg-blue-50 text-blue-700 border border-blue-200">${locationCount}곳 분산</span>`
+            : '';
+          const currentQty = Number(item.current_qty ?? item.product?.current_qty ?? 0);
+
+          const card = document.createElement('div');
+          card.className = 'bg-white border border-slate-200 rounded-2xl p-4';
+          card.innerHTML = `
+            <div class="flex items-start justify-between gap-3 mb-2">
+              <div class="min-w-0">
+                <div class="font-bold text-lg break-words">${highlight(item.product?.style_name || item.style_name || '-', keyword)}</div>
+                <div class="text-sm text-slate-600">${highlight(item.product?.style || item.style || '-', keyword)} / ${highlight(item.product?.color_name || item.color_name || '-', keyword)} / ${escapeHtml(item.product?.size || item.size || '-')}</div>
+              </div>
+              <div class="text-right">
+                <div class="text-xl font-bold ${currentQty <= 0 ? 'text-red-600' : 'text-slate-900'}">${fmtNumber(currentQty)}</div>
+                <div class="text-xs text-slate-500">현재 재고</div>
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-2 mb-2">
+              ${spreadBadge}
+              ${mismatch}
+              <span class="inline-flex px-2 py-1 text-xs rounded-full bg-slate-100 text-slate-700 border border-slate-200">현재 배치 위치: ${escapeHtml(currentLoc === '미지정' ? '미배치' : currentLoc)}</span>
+            </div>
+            <div class="text-sm text-slate-500 break-all">바코드: ${highlight(item.product?.barcode || item.barcode || '-', keyword)}</div>
+            <div class="mt-3 border-t border-slate-100 pt-3">
+              <div class="text-sm font-semibold mb-1">위치별 보관 수량</div>
+              ${renderStockByLocation(locations, item.product?.barcode || item.barcode || '')}
+            </div>
+          `;
+          wrap.appendChild(card);
+        });
+      }
+
+      async function runSearch() {
+        const keyword = document.getElementById('search-input').value.trim();
+        const summary = document.getElementById('search-summary');
+        const loading = document.getElementById('search-loading');
+        const moreBtn = document.getElementById('search-more');
+        state.searchKeyword = keyword;
+        moreBtn.classList.add('hidden');
+
+        if (!keyword) {
+          summary.textContent = '';
+          document.getElementById('search-results').innerHTML = '';
+          return;
+        }
+
+        loading.classList.remove('hidden');
+        try {
+          let data = null;
+          const isLocationSearch = keyword.startsWith('창고-') || keyword.startsWith('매장-');
+
+          if (isLocationSearch) {
+            const locData = await fetchJSON(`${BASE_URL}/api/search/location/${encodeURIComponent(keyword)}`);
+            const locRows = Array.isArray(locData.rows) ? locData.rows : [];
+            const normalizedRows = locRows.map(row => ({
+              product: {
+                style: row.style,
+                style_name: row.style_name,
+                color: row.color,
+                color_name: row.color_name,
+                size: row.size,
+                barcode: row.barcode,
+                current_qty: row.current_qty
+              },
+              current_qty: row.current_qty,
+              locationCount: 1,
+              stockByLocation: [{ location: row.location, qty: row.location_qty }],
+              current: { location: row.location }
+            }));
+            data = { rows: normalizedRows, total: normalizedRows.length };
+          } else {
+            const looksLikeBarcode = keyword.length >= 8 || keyword.includes('-');
+            if (looksLikeBarcode) {
+              try {
+                const exact = await fetchJSON(`${BASE_URL}/api/product/${encodeURIComponent(keyword)}`);
+                exact.stockByLocation = exact.stockByLocation || [];
+                data = { rows: [exact], total: 1 };
+              } catch (e) {}
+            }
+            if (!data) {
+              data = await fetchJSON(`${BASE_URL}/api/search/product?q=${encodeURIComponent(keyword)}&limit=${state.searchLimit}`);
+            }
+          }
+
+          const rows = Array.isArray(data.rows) ? data.rows : [];
+          const zeroStockCount = rows.filter(r => {
+            const q = Number(r.current_qty ?? r.product?.current_qty ?? 0);
+            return q <= 0;
+          }).length;
+          const zeroNote = zeroStockCount > 0 ? ` (재고0 ${fmtNumber(zeroStockCount)}건 포함)` : '';
+          summary.textContent = `총 ${fmtNumber(rows.length)}개 검색됨${zeroNote}`;
+          renderSearchResults(rows, keyword);
+          if (!isLocationSearch && data.hasMore) {
+            moreBtn.classList.remove('hidden');
+          }
+        } catch (e) {
+          showToast(e.message, 'error');
+        } finally {
+          loading.classList.add('hidden');
+        }
+      }
+
+      // ===== 인라인 매장이동 모달 =====
+      const storePickState = { barcode: '', fromLoc: '', qty: 1, max: 0, selected: '' };
+
+      async function fetchStoreLocations() {
+        try {
+          const data = await fetchJSON(`${BASE_URL}/api/locations`);
+          const rows = Array.isArray(data?.rows) ? data.rows : [];
+          return rows.map(r => r.location).filter(loc => String(loc).startsWith('매장-'));
+        } catch (e) {
+          return [];
+        }
+      }
+
+      async function openStorePickModal({ barcode, fromLoc, qty, max }) {
+        storePickState.barcode = barcode;
+        storePickState.fromLoc = fromLoc;
+        storePickState.qty = qty;
+        storePickState.max = max;
+        storePickState.selected = '';
+
+        const modal = document.getElementById('store-pick-modal');
+        const summary = document.getElementById('store-pick-summary');
+        const list = document.getElementById('store-pick-list');
+        const newInput = document.getElementById('store-pick-new');
+        summary.innerHTML = `
+          <div><b>바코드:</b> ${escapeHtml(barcode)}</div>
+          <div><b>현재 위치:</b> ${escapeHtml(fromLoc)} (보관 ${fmtNumber(max)})</div>
+          <div><b>이동 수량:</b> ${fmtNumber(qty)}</div>
+        `;
+        list.innerHTML = '<div class="text-sm text-slate-400">매장 위치 불러오는 중...</div>';
+        newInput.value = '';
+        modal.classList.remove('hidden');
+
+        const stores = await fetchStoreLocations();
+        if (!stores.length) {
+          list.innerHTML = '<div class="text-sm text-slate-500 bg-amber-50 border border-amber-200 rounded-lg p-2">등록된 매장 위치가 없습니다. 아래 입력칸에서 직접 입력하세요.</div>';
+        } else {
+          list.innerHTML = stores.map(loc => `
+            <button type="button" data-store-pick="${escapeHtml(loc)}"
+              class="w-full text-left px-3 py-2 rounded-lg border border-slate-200 hover:bg-blue-50 hover:border-blue-300 text-sm">
+              ${escapeHtml(loc)}
+            </button>
+          `).join('');
+        }
+      }
+
+      function closeStorePickModal() {
+        document.getElementById('store-pick-modal').classList.add('hidden');
+      }
+
+      async function confirmStoreMove(toLoc) {
+        const { barcode, fromLoc, qty } = storePickState;
+        if (!toLoc) { showToast('매장 위치를 선택하거나 입력하세요', 'error'); return; }
+        if (toLoc === fromLoc) { showToast('현재 위치와 이동 위치가 같습니다', 'error'); return; }
+        try {
+          const res = await fetchJSON(`${BASE_URL}/api/move`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              barcode, qty, fromLocation: fromLoc, toLocation: toLoc,
+              memo: '재고조회 인라인 매장이동'
+            })
+          });
+          if (res && res.ok) {
+            showToast(`${qty}개 이동 완료: ${fromLoc} → ${toLoc}`, 'success');
+            closeStorePickModal();
+            // 검색 결과 새로고침
+            if (typeof runSearch === 'function') runSearch();
+          } else {
+            showToast(res?.message || '이동 실패', 'error');
+          }
+        } catch (e) {
+          showToast(e.message || '네트워크 오류', 'error');
+        }
+      }
+
+      // 모달 이벤트 위임
+      document.addEventListener('click', (e) => {
+        if (e.target.closest('[data-store-modal-close]') || e.target.closest('#store-pick-cancel')) {
+          closeStorePickModal();
+          return;
+        }
+        const pickBtn = e.target.closest('[data-store-pick]');
+        if (pickBtn) {
+          storePickState.selected = pickBtn.dataset.storePick;
+          // 강조 표시
+          document.querySelectorAll('[data-store-pick]').forEach(b => b.classList.remove('bg-blue-100','border-blue-400'));
+          pickBtn.classList.add('bg-blue-100','border-blue-400');
+          document.getElementById('store-pick-new').value = '';
+          return;
+        }
+        if (e.target.closest('#store-pick-confirm')) {
+          let toLoc = storePickState.selected;
+          const newVal = document.getElementById('store-pick-new').value.trim();
+          if (newVal) {
+            toLoc = newVal.startsWith('매장-') ? newVal : ('매장-' + newVal);
+          }
+          confirmStoreMove(toLoc);
+          return;
+        }
+      });
+
+      async function loadMoveProduct() {
+        const barcode = document.getElementById('move-barcode').value.trim();
+        const box = document.getElementById('move-product-box');
+        if (!barcode) return showToast('바코드를 입력하세요', 'error');
+        box.innerHTML = '<div class="text-slate-400 py-6 text-center">조회 중...</div>';
+
+        try {
+          const data = await fetchJSON(`${BASE_URL}/api/product/${encodeURIComponent(barcode)}`);
+          state.moveProductLocations = (data.stockByLocation || []).map(item => item.location).filter(Boolean);
+
+          box.innerHTML = `
+            <div class="font-bold text-lg">${escapeHtml(data.product.style_name || '-')}</div>
+            <div class="text-sm text-slate-600 mb-3">${escapeHtml(data.product.barcode)} / ${escapeHtml(data.product.color_name || '-')} / ${escapeHtml(data.product.size || '-')}</div>
+            <div class="text-sm mb-2">총 현재 재고: <b>${fmtNumber(data.current_qty)}</b></div>
+            <div class="space-y-2 mb-4">
+              ${(data.stockByLocation || []).map(item => `
+                <button type="button" class="w-full flex justify-between border border-slate-200 rounded-lg px-3 py-2 text-left" data-pick-from-location="${escapeHtml(item.location)}">
+                  <span>${escapeHtml(item.location === '미지정' ? '미배치' : item.location)}</span>
+                  <span class="font-semibold">${fmtNumber(item.qty)}</span>
+                </button>
+              `).join('')}
+            </div>
+            <div class="text-xs text-slate-500">위 목록을 눌러 현재 위치를 바로 선택할 수 있습니다.</div>
+          `;
+          renderMoveSuggestions('from');
+          renderMoveSuggestions('to');
+        } catch (e) {
+          box.innerHTML = '<div class="text-red-600 py-6 text-center">조회 실패</div>';
+          showToast(e.message, 'error');
+        }
+      }
+
+      function createStatCard(title, value) {
+        return `
+          <div class="bg-white border border-slate-200 rounded-2xl p-4">
+            <div class="text-sm text-slate-500 mb-1">${escapeHtml(title)}</div>
+            <div class="text-2xl font-bold">${escapeHtml(value)}</div>
+          </div>
+        `;
+      }
+
+      async function loadStats() {
+        const cards = document.getElementById('stats-cards');
+        const mismatchList = document.getElementById('mismatch-list');
+        const locationSummary = document.getElementById('location-summary');
+
+        cards.innerHTML = '<div class="col-span-full text-slate-400">불러오는 중...</div>';
+        mismatchList.innerHTML = '';
+        locationSummary.innerHTML = '';
+
+        try {
+          const data = await fetchJSON(`${BASE_URL}/api/stats`);
+          state.stats = data;
+
+          cards.innerHTML = [
+            createStatCard('총 상품 수', fmtNumber(data.totalProducts)),
+            createStatCard('총 초도재고', fmtNumber(data.totalInitialStock)),
+            createStatCard('총 현재재고', fmtNumber(data.totalCurrentStock)),
+            createStatCard('미배치 총량', fmtNumber(data.unassignedTotal ?? 0)),
+            createStatCard('배치 위치 수', fmtNumber((data.locations || []).length)),
+            createStatCard('불일치 수', fmtNumber(data.mismatchCount ?? 0))
+          ].join('');
+
+          const mismatches = (data.mismatches || []).slice(0, 20);
+          if (!mismatches.length) {
+            mismatchList.innerHTML = '<div class="text-slate-400">불일치 항목이 없습니다.</div>';
+          } else {
+            mismatchList.innerHTML = mismatches.map(item => `
+              <div class="border border-amber-200 bg-amber-50 rounded-xl p-3">
+                <div class="font-semibold break-all">${escapeHtml(item.barcode)}</div>
+                <div class="text-sm text-slate-600">${escapeHtml(item.style_name || '-')}</div>
+                <div class="text-sm mt-1">전체 ${fmtNumber(item.current_qty)} / 위치합 ${fmtNumber(item.sbl_sum)}</div>
+              </div>
+            `).join('');
+          }
+
+          const locs = data.locations || [];
+          if (!locs.length) {
+            locationSummary.innerHTML = '<div class="text-slate-400">위치 요약 정보가 없습니다.</div>';
+          } else {
+            locationSummary.innerHTML = locs.slice(0, 20).map(loc => `
+              <div class="flex justify-between border border-slate-200 rounded-xl p-3">
+                <div class="min-w-0">
+                  <div class="font-semibold break-all">${escapeHtml(loc.location === '미지정' ? '미배치' : loc.location)}</div>
+                  <div class="text-sm text-slate-500">${fmtNumber(loc.bc_count || loc.cnt || 0)}종</div>
+                </div>
+                <div class="text-right">
+                  <div class="font-bold">${fmtNumber(loc.total_qty || 0)}</div>
+                </div>
+              </div>
+            `).join('');
+          }
+
+          const datalist = document.getElementById('location-list');
+          const set = new Set();
+          locs.forEach(loc => {
+            if (loc.location && !set.has(loc.location)) {
+              set.add(loc.location);
+            }
+          });
+          state.locationList = [...set];
+          datalist.innerHTML = state.locationList.map(value => `<option value="${escapeHtml(value)}"></option>`).join('');
+        } catch (e) {
+          cards.innerHTML = '<div class="col-span-full text-red-600">현황을 불러오지 못했습니다.</div>';
+          showToast(e.message, 'error');
+        }
+      }
+
+      document.addEventListener('DOMContentLoaded', () => {
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+          btn.addEventListener('click', () => setActiveTab(btn.dataset.tab));
+        });
+
+        document.getElementById('help-toggle').addEventListener('click', () => {
+          document.getElementById('help-box').classList.toggle('hidden');
+        });
+
+        document.addEventListener('click', async (e) => {
+          const baseBtn = e.target.closest('[data-base-target]');
+          if (baseBtn) {
+            const target = baseBtn.dataset.baseTarget;
+            const value = baseBtn.dataset.baseValue;
+            if (target === 'register-base') state.registerBase = value;
+            if (target === 'add-base') state.addBase = value;
+            if (target === 'move-from-base') state.moveFromBase = value;
+            if (target === 'move-to-base') state.moveToBase = value;
+            renderBaseButtons();
+            refreshLocationPreviews();
+            if (target === 'register-base') renderRegisterSuggestions();
+            if (target === 'move-from-base') renderMoveSuggestions('from');
+            if (target === 'move-to-base') renderMoveSuggestions('to');
+            return;
+          }
+
+          const registerPickBtn = e.target.closest('[data-register-pick]');
+          if (registerPickBtn) {
+            document.getElementById('register-detail').value = registerPickBtn.dataset.registerPick || '';
+            refreshLocationPreviews();
+            hideRegisterSuggestions();
+            return;
+          }
+
+          const movePickBtn = e.target.closest('[data-move-pick]');
+          if (movePickBtn) {
+            const kind = movePickBtn.dataset.movePick;
+            const value = movePickBtn.dataset.value || '';
+            document.getElementById(kind === 'from' ? 'move-from-detail' : 'move-to-detail').value = value;
+            refreshLocationPreviews();
+            hideMoveSuggestions();
+            return;
+          }
+
+          const pickFromLocationBtn = e.target.closest('[data-pick-from-location]');
+          if (pickFromLocationBtn) {
+            const full = pickFromLocationBtn.dataset.pickFromLocation || '';
+            if (full.startsWith('창고-')) { state.moveFromBase = '창고'; document.getElementById('move-from-detail').value = stripBase(full, '창고'); }
+            else if (full.startsWith('매장-')) { state.moveFromBase = '매장'; document.getElementById('move-from-detail').value = stripBase(full, '매장'); }
+            renderBaseButtons();
+            refreshLocationPreviews();
+            hideMoveSuggestions();
+            return;
+          }
+
+          if (!e.target.closest('#register-suggest') && !e.target.closest('#register-detail')) {
+            hideRegisterSuggestions();
+          }
+          if (!e.target.closest('#move-from-suggest') && !e.target.closest('#move-to-suggest') && !e.target.closest('#move-from-detail') && !e.target.closest('#move-to-detail')) {
+            hideMoveSuggestions();
+          }
+
+          const removeBtn = e.target.closest('[data-remove-index]');
+          if (removeBtn) {
+            state.placementQueue.splice(Number(removeBtn.dataset.removeIndex), 1);
+            renderPlacementQueue();
+            return;
+          }
+
+          // 인라인 매장이동 버튼
+          const moveStoreBtn = e.target.closest('.move-to-store-btn');
+          if (moveStoreBtn) {
+            const barcode = moveStoreBtn.dataset.barcode || '';
+            const fromLoc = moveStoreBtn.dataset.from || '';
+            const max = Number(moveStoreBtn.dataset.max || 0);
+            const rowId = moveStoreBtn.dataset.row || '';
+            // 같은 행의 input에서 수량 읽기
+            const row = rowId ? document.getElementById(rowId) : null;
+            const qtyInput = row ? row.querySelector('.move-qty-input') : null;
+            const qty = qtyInput ? Number(qtyInput.value) : 1;
+            if (!barcode || !fromLoc) { showToast('바코드/현재 위치를 확인할 수 없습니다', 'error'); return; }
+            if (!Number.isFinite(qty) || qty < 1) { showToast('수량은 1 이상이어야 합니다', 'error'); return; }
+            if (qty > max) { showToast(`보관 수량(${max}) 이하로 입력하세요`, 'error'); return; }
+            openStorePickModal({ barcode, fromLoc, qty, max });
+            return;
+          }
+        });
+
+        ['register-detail','add-detail','move-from-detail','move-to-detail'].forEach(id => {
+          document.getElementById(id).addEventListener('input', refreshLocationPreviews);
+        });
+        document.getElementById('register-detail').addEventListener('input', renderRegisterSuggestions);
+        document.getElementById('register-detail').addEventListener('focus', renderRegisterSuggestions);
+        document.getElementById('register-detail').addEventListener('blur', () => setTimeout(hideRegisterSuggestions, 150));
+        document.getElementById('move-from-detail').addEventListener('input', () => renderMoveSuggestions('from'));
+        document.getElementById('move-to-detail').addEventListener('input', () => renderMoveSuggestions('to'));
+        document.getElementById('move-from-detail').addEventListener('focus', () => renderMoveSuggestions('from'));
+        document.getElementById('move-to-detail').addEventListener('focus', () => renderMoveSuggestions('to'));
+        document.getElementById('move-from-detail').addEventListener('blur', () => setTimeout(hideMoveSuggestions, 150));
+        document.getElementById('move-to-detail').addEventListener('blur', () => setTimeout(hideMoveSuggestions, 150));
+
+        document.getElementById('register-add').addEventListener('click', () => {
+          const barcode = document.getElementById('register-barcode').value.trim();
+          const qty = Number(document.getElementById('register-qty').value || 1);
+          if (!barcode) return showToast('바코드를 입력하세요', 'error');
+          if (qty <= 0) return showToast('수량은 1 이상이어야 합니다', 'error');
+          const found = state.placementQueue.find(x => x.barcode === barcode);
+          if (found) found.qty += qty;
+          else state.placementQueue.push({ barcode, qty });
+          document.getElementById('register-barcode').value = '';
+          document.getElementById('register-qty').value = '1';
+          renderPlacementQueue();
+          showToast('대기열에 추가했습니다', 'success');
+          vibrate();
+        });
+
+        document.getElementById('register-clear').addEventListener('click', () => {
+          state.placementQueue = [];
+          renderPlacementQueue();
+        });
+
+        document.getElementById('register-save').addEventListener('click', async () => {
+          const location = combineLocation(state.registerBase, document.getElementById('register-detail').value);
+          if (!location) return showToast('위치를 입력하세요', 'error');
+          if (!state.placementQueue.length) return showToast('대기열이 비어 있습니다', 'error');
+
+          try {
+            await fetchJSON(`${BASE_URL}/api/assign`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ location, items: state.placementQueue })
+            });
+            showToast('배치 저장 완료', 'success');
+            vibrate();
+            state.placementQueue = [];
+            renderPlacementQueue();
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        });
+
+        document.getElementById('add-submit').addEventListener('click', async () => {
+          const barcode = document.getElementById('add-barcode').value.trim();
+          const qty = Number(document.getElementById('add-qty').value || 1);
+          const memo = document.getElementById('add-memo').value.trim();
+          const location = combineLocation(state.addBase, document.getElementById('add-detail').value || (state.addBase === '창고' ? '기본' : ''));
+          if (!barcode || !location || qty <= 0) return showToast('바코드, 위치, 수량을 확인하세요', 'error');
+
+          try {
+            await fetchJSON(`${BASE_URL}/api/restock`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ barcode, qty, location, memo })
+            });
+            showToast('재고 추가 완료', 'success');
+            vibrate();
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        });
+
+        document.getElementById('search-input').addEventListener('input', debounce(runSearch, 250));
+        document.getElementById('search-more').addEventListener('click', () => {
+          state.searchLimit += 50;
+          runSearch();
+        });
+
+        document.getElementById('move-load').addEventListener('click', loadMoveProduct);
+        document.getElementById('move-submit').addEventListener('click', async () => {
+          const barcode = document.getElementById('move-barcode').value.trim();
+          const qty = Number(document.getElementById('move-qty').value || 1);
+          const memo = document.getElementById('move-memo').value.trim();
+          const fromDetail = document.getElementById('move-from-detail').value.trim() || '불량';
+          const toDetail = document.getElementById('move-to-detail').value.trim() || '기본';
+          const fromLocation = combineLocation(state.moveFromBase, fromDetail);
+          const toLocation = combineLocation(state.moveToBase, toDetail);
+
+          if (!barcode || !fromLocation || !toLocation || qty <= 0) {
+            return showToast('바코드, 현재 위치, 이동 위치, 수량을 확인하세요', 'error');
+          }
+          if (!isKnownMoveLocation('from', fromDetail)) {
+            return showToast('현재 위치는 검색 결과에서 선택해 주세요', 'error');
+          }
+          if (!isKnownMoveLocation('to', toDetail)) {
+            return showToast('이동 위치는 검색 결과에서 선택해 주세요', 'error');
+          }
+
+          try {
+            await fetchJSON(`${BASE_URL}/api/move`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ barcode, qty, fromLocation, toLocation, memo })
+            });
+            showToast('상품이동 완료', 'success');
+            vibrate();
+            loadMoveProduct();
+          } catch (e) {
+            showToast(e.message, 'error');
+          }
+        });
+
+        document.getElementById('stats-refresh').addEventListener('click', loadStats);
+
+        renderBaseButtons();
+        refreshLocationPreviews();
+        setActiveTab('register');
+        renderPlacementQueue();
+        loadStats();
+      });
+    })();
+  </script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v833ccba57c9e4d2798f2e76cebdd09a11778172276447" integrity="sha512-57MDmcccJXYtNnH+ZiBwzC4jb2rvgVCEokYN+L/nLlmO8rfYT/gIpW2A569iJ/3b+0UEasghjuZH/ma3wIs/EQ==" data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>
