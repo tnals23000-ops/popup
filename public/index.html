@@ -42,12 +42,13 @@
         <div class="flex-1 min-w-0">
           <h1 class="text-2xl font-bold mb-2">팝업 재고 관리</h1>
           <p class="text-sm text-slate-600 mb-2">상품등록 / 재고조회 / 상품이동(창고-매장) / 현황 기준으로 운영합니다.</p>
-          <div class="text-xs text-slate-500 break-all">API: <span id="api-url-text">https://tale-probability-representative-auditor.trycloudflare.com</span></div>
+          <div class="text-xs text-slate-500 break-all">API: <span id="api-url-text">(자동 감지)</span></div>
           <button type="button" id="help-toggle" class="btn-touch mt-3 px-3 py-2 text-sm bg-slate-100 rounded-lg border border-slate-200">도움말 보기/숨기기</button>
         </div>
         <div class="w-full lg:w-auto flex flex-col items-center">
           <img
-            src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=https://tale-probability-representative-auditor.trycloudflare.com"
+            id="api-url-qr"
+            src=""
             alt="API QR"
             class="w-[140px] h-[140px] border border-slate-200 rounded-lg bg-white"
           />
@@ -253,7 +254,7 @@
         <h2 class="text-lg font-bold">현황</h2>
         <div class="flex gap-2">
           <button type="button" id="stats-refresh" class="btn-touch px-4 rounded-xl bg-slate-100 border border-slate-200">새로고침</button>
-          <a href="https://tale-probability-representative-auditor.trycloudflare.com/api/export" target="_blank" rel="noopener" class="btn-touch px-4 rounded-xl bg-slate-900 text-white inline-flex items-center">CSV 다운로드</a>
+          <a href="/api/export" target="_blank" rel="noopener" class="btn-touch px-4 rounded-xl bg-slate-900 text-white inline-flex items-center">CSV 다운로드</a>
         </div>
       </div>
       <div id="stats-cards" class="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-4"></div>
@@ -292,7 +293,15 @@
 
   <script>
     (() => {
-      const BASE_URL = 'https://tale-probability-representative-auditor.trycloudflare.com';
+      const BASE_URL = window.location.origin;
+      (function applyApiUrlUi(){
+        try {
+          const txt = document.getElementById('api-url-text');
+          if (txt) txt.textContent = BASE_URL;
+          const qr = document.getElementById('api-url-qr');
+          if (qr) qr.src = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(BASE_URL);
+        } catch (e) {}
+      })();
       const state = {
         placementQueue: [],
         searchLimit: 50,
@@ -1090,6 +1099,5 @@
       });
     })();
   </script>
-<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v833ccba57c9e4d2798f2e76cebdd09a11778172276447" integrity="sha512-57MDmcccJXYtNnH+ZiBwzC4jb2rvgVCEokYN+L/nLlmO8rfYT/gIpW2A569iJ/3b+0UEasghjuZH/ma3wIs/EQ==" data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>
