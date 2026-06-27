@@ -1,1 +1,17 @@
-20.18.0
+{
+  "name": "popup-inventory",
+  "version": "1.0.1",
+  "description": "팝업 스토어 재고 로케이션 매칭 웹사이트 (Express + SQLite)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": "20.x"
+  },
+  "dependencies": {
+    "better-sqlite3": "11.5.0",
+    "express": "4.21.0",
+    "xlsx": "0.18.5"
+  }
+}
