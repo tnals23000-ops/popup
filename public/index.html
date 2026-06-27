@@ -308,20 +308,39 @@
         <button type="button" id="scanner-close" class="text-slate-500 hover:text-slate-800 text-xl leading-none px-2">✕</button>
       </div>
       <div id="scanner-status" class="text-xs text-slate-500 mb-2">카메라를 켜는 중...</div>
-      <div id="scanner-reader" class="w-full bg-slate-900 rounded-xl overflow-hidden" style="min-height: 280px;"></div>
+      <div id="scanner-reader" class="w-full bg-slate-900 rounded-xl overflow-hidden" style="min-height: 320px;"></div>
       <div id="scanner-last" class="hidden mt-2 text-sm bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg px-3 py-2"></div>
+      <div id="scanner-candidate" class="hidden mt-2 text-sm bg-amber-50 border border-amber-200 text-amber-900 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
+        <div class="truncate"><span class="text-xs text-amber-700">현재 후보:</span> <span id="scanner-candidate-text" class="font-bold break-all"></span></div>
+        <button type="button" id="scanner-accept" class="shrink-0 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold px-3 py-1.5">이 값으로 확정</button>
+      </div>
+      <div id="scanner-controls" class="hidden mt-3 space-y-2">
+        <div class="flex items-center gap-2 text-xs">
+          <span class="text-slate-600 w-12 shrink-0">🔍 줌</span>
+          <input type="range" id="scanner-zoom" min="1" max="5" step="0.1" value="1" class="flex-1" />
+          <span id="scanner-zoom-val" class="text-slate-500 w-10 text-right">1.0x</span>
+        </div>
+        <div class="flex items-center gap-2 text-xs" id="scanner-torch-row">
+          <span class="text-slate-600 w-12 shrink-0">💡 조명</span>
+          <button type="button" id="scanner-torch" class="flex-1 rounded-lg bg-slate-100 border border-slate-200 px-2 py-1.5 font-semibold">플래시 켜기</button>
+        </div>
+      </div>
       <div class="mt-3 flex flex-col gap-1.5">
         <div class="flex items-center gap-3 flex-wrap">
           <label class="text-xs text-slate-600 flex items-center gap-1">
             <input type="checkbox" id="scanner-continuous" class="w-4 h-4" />
-            <span>연속 스캔(여러 개 연속 입력)</span>
+            <span>연속 스캔</span>
           </label>
           <label class="text-xs text-slate-600 flex items-center gap-1" title="EAN-13 / EAN-8 / UPC 등 13~14자리 숫자 바코드는 무시하고 영문+숫자 SKU만 사용합니다.">
             <input type="checkbox" id="scanner-skip-numeric" class="w-4 h-4" checked />
-            <span>숫자 전용 바코드(EAN/UPC) 무시</span>
+            <span>EAN/UPC 무시</span>
+          </label>
+          <label class="text-xs text-slate-600 flex items-center gap-1" title="같은 값을 2회 연속 인식한 경우에만 확정 (작은 라벨 오인식 방지).">
+            <input type="checkbox" id="scanner-confirm2" class="w-4 h-4" />
+            <span>2회 확인 후 확정</span>
           </label>
         </div>
-        <span class="text-xs text-slate-400">SKU(영문+숫자, 예: FW21-HD04WHS) 부분을 화면 중앙에 비춰주세요.</span>
+        <span class="text-xs text-slate-400">📏 라벨에서 카메라까지 <b>10~20cm</b>가 적당합니다. 줌/플래시를 활용하고 잘 안 잡히면 후보를 한 번 확정해 보세요.</span>
       </div>
       <div class="mt-3 grid grid-cols-2 gap-2">
         <button type="button" id="scanner-switch" class="btn-touch rounded-xl bg-slate-100 border border-slate-200 font-semibold">카메라 전환</button>
@@ -879,10 +898,24 @@
           last: () => document.getElementById('scanner-last'),
           continuous: () => document.getElementById('scanner-continuous'),
           skipNumeric: () => document.getElementById('scanner-skip-numeric'),
+          confirm2: () => document.getElementById('scanner-confirm2'),
           switchBtn: () => document.getElementById('scanner-switch'),
           cancelBtn: () => document.getElementById('scanner-cancel'),
           closeBtn: () => document.getElementById('scanner-close'),
+          candidate: () => document.getElementById('scanner-candidate'),
+          candidateText: () => document.getElementById('scanner-candidate-text'),
+          acceptBtn: () => document.getElementById('scanner-accept'),
+          controls: () => document.getElementById('scanner-controls'),
+          zoom: () => document.getElementById('scanner-zoom'),
+          zoomVal: () => document.getElementById('scanner-zoom-val'),
+          torch: () => document.getElementById('scanner-torch'),
+          torchRow: () => document.getElementById('scanner-torch-row'),
         };
+
+        // 디코드 후보 상태
+        let candidateCode = null;
+        let candidateCount = 0;
+        let torchOn = false;
 
         function setStatus(t, color) {
           const s = els.status();
@@ -1027,26 +1060,134 @@
             }
           } catch (_) { /* ignore */ }
 
+          // 고해상도 + 연속 자동초점 비디오 제약 (디바이스가 지원하면 적용, 아니면 자동 fallback)
+          const videoConstraints = {
+            facingMode: { ideal: 'environment' },
+            width:  { ideal: 1920 },
+            height: { ideal: 1080 },
+            // @ts-ignore - 일부 브라우저에서 advanced로 동작
+            advanced: [
+              { focusMode: 'continuous' },
+              { focusMode: 'auto' }
+            ]
+          };
+
           const config = {
-            fps: 10,
+            fps: 25, // 스캔 빈도 향상 (작은 1D 바코드 인식률 ↑)
             qrbox: (vw, vh) => {
-              const m = Math.min(vw, vh);
-              return { width: Math.round(m * 0.8), height: Math.round(m * 0.45) };
+              // 가로형 박스를 더 크게 (1D 바코드는 가로로 길다)
+              const w = Math.round(Math.min(vw * 0.95, 720));
+              const h = Math.round(Math.min(vh * 0.55, 320));
+              return { width: w, height: h };
             },
-            aspectRatio: 1.333,
-            disableFlip: false,
+            aspectRatio: 1.7778, // 16:9
+            disableFlip: true,    // 거울모드 해제 (성능 ↑)
+            videoConstraints,
+            experimentalFeatures: { useBarCodeDetectorIfSupported: true },
           };
           if (formats && formats.length) {
             config.formatsToSupport = formats;
           }
-          await html5Qr.start(
-            camId,
-            config,
-            (decodedText, decodedResult) => onDecoded(decodedText, decodedResult),
-            () => { /* per-frame error 무시 */ }
-          );
+          try {
+            await html5Qr.start(
+              camId,
+              config,
+              (decodedText, decodedResult) => onDecoded(decodedText, decodedResult),
+              () => { /* per-frame error 무시 */ }
+            );
+          } catch (err) {
+            // 고해상도 실패 시 720p로 fallback
+            console.warn('[scanner] 1080p 실패, 720p로 재시도:', err && err.message);
+            config.videoConstraints = {
+              facingMode: { ideal: 'environment' },
+              width:  { ideal: 1280 },
+              height: { ideal: 720 },
+              advanced: [{ focusMode: 'continuous' }]
+            };
+            await html5Qr.start(camId, config,
+              (t, r) => onDecoded(t, r),
+              () => {}
+            );
+          }
           const label = cameras[camIdx].label || `카메라 ${camIdx + 1}`;
-          setStatus(`스캔 중... (${label})`, 'text-emerald-600');
+          setStatus(`스캔 중... (${label}) — 10~20cm 거리 권장`, 'text-emerald-600');
+
+          // 줌/플래시 컨트롤 적용 (지원 시)
+          try {
+            await applyTrackControls();
+          } catch (e) {
+            console.warn('[scanner] 트랙 컨트롤 적용 실패:', e && e.message);
+          }
+        }
+
+        function getActiveVideoTrack() {
+          try {
+            const video = document.querySelector('#scanner-reader video');
+            if (!video || !video.srcObject) return null;
+            const tracks = video.srcObject.getVideoTracks ? video.srcObject.getVideoTracks() : [];
+            return tracks && tracks.length ? tracks[0] : null;
+          } catch (_) { return null; }
+        }
+
+        async function applyTrackControls() {
+          const track = getActiveVideoTrack();
+          const controlsEl = els.controls();
+          if (!track || !track.getCapabilities) {
+            if (controlsEl) controlsEl.classList.add('hidden');
+            return;
+          }
+          const caps = track.getCapabilities();
+          let anyShown = false;
+
+          // 줌
+          const zoomInput = els.zoom();
+          const zoomVal = els.zoomVal();
+          if (caps.zoom && zoomInput) {
+            const min = caps.zoom.min || 1;
+            const max = caps.zoom.max || 5;
+            const step = caps.zoom.step || 0.1;
+            zoomInput.min = String(min);
+            zoomInput.max = String(max);
+            zoomInput.step = String(step);
+            zoomInput.value = String(track.getSettings().zoom || min);
+            zoomVal.textContent = Number(zoomInput.value).toFixed(1) + 'x';
+            zoomInput.oninput = async () => {
+              const v = Number(zoomInput.value);
+              zoomVal.textContent = v.toFixed(1) + 'x';
+              try { await track.applyConstraints({ advanced: [{ zoom: v }] }); } catch (_) {}
+            };
+            zoomInput.parentElement.classList.remove('hidden');
+            anyShown = true;
+          } else if (zoomInput) {
+            zoomInput.parentElement.classList.add('hidden');
+          }
+
+          // 토치(플래시)
+          const torchBtn = els.torch();
+          const torchRow = els.torchRow();
+          if (caps.torch && torchBtn) {
+            torchOn = false;
+            torchBtn.textContent = '플래시 켜기';
+            torchBtn.onclick = async () => {
+              torchOn = !torchOn;
+              try {
+                await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+                torchBtn.textContent = torchOn ? '플래시 끄기' : '플래시 켜기';
+                torchBtn.className = torchBtn.className.replace(/bg-amber-\d{3}/g, '');
+                if (torchOn) torchBtn.classList.add('bg-amber-300');
+                else torchBtn.classList.add('bg-slate-100');
+              } catch (e) {
+                showToast('플래시 제어 실패: ' + (e.message || ''), 'warn');
+              }
+            };
+            torchRow.classList.remove('hidden');
+            anyShown = true;
+          } else if (torchRow) {
+            torchRow.classList.add('hidden');
+          }
+
+          const controls = els.controls();
+          if (controls) controls.classList.toggle('hidden', !anyShown);
         }
 
         // 숫자만으로 구성된 EAN/UPC 계열 코드인지 판정
@@ -1067,6 +1208,40 @@
           return false;
         }
 
+        function showCandidate(code) {
+          const box = els.candidate();
+          const txt = els.candidateText();
+          if (!box || !txt) return;
+          txt.textContent = code;
+          box.classList.remove('hidden');
+        }
+        function hideCandidate() {
+          const box = els.candidate();
+          if (box) box.classList.add('hidden');
+          candidateCode = null;
+          candidateCount = 0;
+        }
+
+        function acceptCode(code, fmtName) {
+          // 입력칸 채우기
+          const input = document.getElementById(targetInputId);
+          if (input) {
+            input.value = code;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+          showLast(code + (fmtName ? '  · ' + fmtName : ''));
+          if (navigator.vibrate) { try { navigator.vibrate(80); } catch(_){} }
+          hideCandidate();
+
+          const continuous = els.continuous() && els.continuous().checked;
+          performAction(code, continuous);
+
+          if (!continuous) {
+            setTimeout(() => stop(), 400);
+          }
+        }
+
         function onDecoded(text, decodedResult) {
           const code = String(text || '').trim();
           if (!code) return;
@@ -1082,7 +1257,6 @@
           const skipNumeric = !els.skipNumeric() || els.skipNumeric().checked;
           const isEanUpcFmt = /EAN|UPC/i.test(fmtName);
           if (skipNumeric && (isEanUpcFmt || isNumericRetailBarcode(code))) {
-            // 무시: 라벨에 EAN과 SKU가 같이 있을 때 SKU 잡힐 때까지 계속 스캔
             const now = Date.now();
             if (now - lastAt > 800) {
               lastAt = now;
@@ -1092,29 +1266,31 @@
           }
 
           const now = Date.now();
+          // 같은 코드 디바운스
           if (code === lastCode && (now - lastAt) < COOLDOWN_MS) return;
+
+          // 2회 확인 모드: 같은 코드가 N회 연속 잡힐 때만 확정 (작은 라벨/오인식 방지)
+          const needConfirm = els.confirm2() && els.confirm2().checked;
+          if (needConfirm) {
+            if (candidateCode === code) {
+              candidateCount += 1;
+            } else {
+              candidateCode = code;
+              candidateCount = 1;
+            }
+            showCandidate(code + (fmtName ? '  · ' + fmtName : '') + `  (${candidateCount}/2)`);
+            if (candidateCount < 2) {
+              setStatus(`후보 감지 — 한 번 더 같은 코드가 잡히면 확정합니다 (${candidateCount}/2)`, 'text-amber-600');
+              return;
+            }
+          } else {
+            // 일반 모드에서도 후보 영역에 표시(수동 확정 가능)
+            showCandidate(code + (fmtName ? '  · ' + fmtName : ''));
+          }
+
           lastCode = code;
           lastAt = now;
-
-          // 입력칸 채우기
-          const input = document.getElementById(targetInputId);
-          if (input) {
-            input.value = code;
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-          }
-
-          showLast(code + (fmtName ? '  · ' + fmtName : ''));
-          if (navigator.vibrate) { try { navigator.vibrate(80); } catch(_){} }
-
-          const continuous = els.continuous() && els.continuous().checked;
-          // 액션 자동 실행
-          performAction(code, continuous);
-
-          if (!continuous) {
-            // 잠시 대기 후 닫기
-            setTimeout(() => stop(), 400);
-          }
+          acceptCode(code, fmtName);
         }
 
         function performAction(code, continuous) {
@@ -1164,9 +1340,25 @@
           els.modal().classList.add('hidden');
           isOpen = false;
           hideLast();
+          hideCandidate();
+          // 컨트롤 영역 초기화
+          const ctrl = els.controls();
+          if (ctrl) ctrl.classList.add('hidden');
+          torchOn = false;
         }
 
-        return { start, stop, switchCamera };
+        function manualAccept() {
+          if (!candidateCode) {
+            showToast('아직 인식된 후보가 없습니다. 잠시 비춘 뒤 다시 시도해 주세요.', 'warn');
+            return;
+          }
+          const code = candidateCode;
+          lastCode = code;
+          lastAt = Date.now();
+          acceptCode(code, '');
+        }
+
+        return { start, stop, switchCamera, manualAccept };
       })();
 
       async function loadStats() {
@@ -1460,6 +1652,8 @@
         if (sc) sc.addEventListener('click', () => Scanner.stop());
         if (sx) sx.addEventListener('click', () => Scanner.stop());
         if (sw) sw.addEventListener('click', () => Scanner.switchCamera());
+        const sa = document.getElementById('scanner-accept');
+        if (sa) sa.addEventListener('click', () => Scanner.manualAccept());
         document.querySelectorAll('[data-scanner-modal-close="1"]').forEach(el => {
           el.addEventListener('click', () => Scanner.stop());
         });
