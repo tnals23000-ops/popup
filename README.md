@@ -4,6 +4,9 @@
 
 ## 주요 기능
 - 📷 카메라 바코드 스캔: 등록·조회·이동 탭에서 모바일/노트북 카메라로 바코드 자동 입력
+  - SKU(CODE128/CODE39 등 영문+숫자) 우선 인식
+  - EAN-13 / UPC 등 숫자 전용 소매 바코드는 기본 무시 (모달 토글로 해제 가능)
+  - html5-qrcode 다중 CDN 폴백(unpkg → jsdelivr → cdnjs), HTTPS 환경 필수
   - html5-qrcode 라이브러리는 클릭 시점에 다중 CDN(jsdelivr → unpkg → cdnjs)으로 동적 로드 + 폴백
   - HTTPS 필수 (Render 도메인은 자동 HTTPS)
 - 📦 상품등록: 바코드 + 로케이션 + 수량
