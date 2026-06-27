@@ -936,13 +936,25 @@
           if (l) l.classList.add('hidden');
         }
 
-        // 다중 CDN 폴백으로 html5-qrcode 동적 로드
-        const SCANNER_CDNS = [
+        // ====== 듀얼 엔진(ZXing 우선 + html5-qrcode 폴백) 동적 로더 ======
+        // 엔진 상태: 'zxing' | 'h5q' | null
+        let engine = null;
+        // ZXing 인스턴스
+        let zxingReader = null;
+        let zxingControls = null; // decodeFromConstraints() 결과 컨트롤
+        // 로더 우선순위: ZXing(@zxing/browsers) -> 폴백 html5-qrcode
+        const ZXING_CDNS = [
+          'https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/index.min.js',
+          'https://unpkg.com/@zxing/browser@0.1.5/umd/index.min.js',
+          'https://cdn.jsdelivr.net/npm/@zxing/library@0.20.0/umd/index.min.js'
+        ];
+        const H5Q_CDNS = [
           'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.10/html5-qrcode.min.js',
           'https://unpkg.com/html5-qrcode@2.3.10/html5-qrcode.min.js',
           'https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js'
         ];
         let scannerLoadPromise = null;
+
         function loadScript(url, timeoutMs) {
           return new Promise((resolve, reject) => {
             const s = document.createElement('script');
@@ -960,69 +972,91 @@
             const tid = setTimeout(() => {
               try { s.remove(); } catch (_) {}
               finish(false, new Error('timeout: ' + url));
-            }, timeoutMs || 8000);
+            }, timeoutMs || 9000);
             document.head.appendChild(s);
           });
         }
+
+        // ZXing 전역 노출 헬퍼: @zxing/browser UMD는 window.ZXingBrowser 또는 window.ZXing 으로 노출
+        function getZxingNS() {
+          return window.ZXingBrowser || window.ZXing || null;
+        }
+        function hasZxingReader() {
+          const ns = getZxingNS();
+          return !!(ns && (ns.BrowserMultiFormatReader));
+        }
+
         async function ensureScannerLoaded() {
-          if (window.Html5Qrcode) return true;
+          if (engine) return engine;
           if (scannerLoadPromise) return scannerLoadPromise;
           scannerLoadPromise = (async () => {
-            let lastErr = null;
-            for (const url of SCANNER_CDNS) {
+            // 1) ZXing 시도
+            for (const url of ZXING_CDNS) {
               try {
-                console.log('[scanner] try', url);
-                await loadScript(url, 8000);
-                if (window.Html5Qrcode) return true;
+                console.log('[scanner] try ZXing', url);
+                await loadScript(url, 9000);
+                if (hasZxingReader()) {
+                  engine = 'zxing';
+                  console.log('[scanner] engine = ZXing');
+                  return engine;
+                }
               } catch (e) {
-                console.warn('[scanner] fail', url, e && e.message);
-                lastErr = e;
+                console.warn('[scanner] ZXing fail', url, e && e.message);
               }
             }
-            scannerLoadPromise = null; // 다음 클릭에 재시도 가능
-            throw lastErr || new Error('all CDNs failed');
+            // 2) html5-qrcode 폴백
+            for (const url of H5Q_CDNS) {
+              try {
+                console.log('[scanner] try html5-qrcode', url);
+                await loadScript(url, 9000);
+                if (window.Html5Qrcode) {
+                  engine = 'h5q';
+                  console.log('[scanner] engine = html5-qrcode (폴백)');
+                  return engine;
+                }
+              } catch (e) {
+                console.warn('[scanner] h5q fail', url, e && e.message);
+              }
+            }
+            scannerLoadPromise = null;
+            throw new Error('모든 카메라 라이브러리 로드 실패');
           })();
           return scannerLoadPromise;
         }
 
         async function start(inputId, act) {
           if (isOpen) return;
-          if (!window.Html5Qrcode) {
-            // 모달 먼저 띄우고 로딩 상태 표시
-            targetInputId = inputId;
-            action = act;
-            els.modal().classList.remove('hidden');
-            isOpen = true;
-            setStatus('카메라 모듈 로드 중... (CDN)');
-            try {
-              await ensureScannerLoaded();
-            } catch (e) {
-              console.error('[scanner] load error', e);
-              setStatus('카메라 모듈을 불러오지 못했습니다. 네트워크 또는 광고 차단 확인 후 다시 시도해 주세요.', 'text-red-600');
-              showToast('카메라 모듈 로드 실패 — 잠시 후 다시 시도해 주세요.', 'error');
-              return;
-            }
-          }
           targetInputId = inputId;
           action = act;
           lastCode = null;
           lastAt = 0;
           hideLast();
+          hideCandidate();
           els.modal().classList.remove('hidden');
           isOpen = true;
-          setStatus('카메라를 켜는 중...');
+
+          if (!engine) {
+            setStatus('카메라 모듈 로드 중... (ZXing 우선)');
+            try {
+              await ensureScannerLoaded();
+            } catch (e) {
+              console.error('[scanner] load error', e);
+              setStatus('카메라 모듈을 불러오지 못했습니다. 네트워크/광고차단 확인 후 다시 시도해 주세요.', 'text-red-600');
+              showToast('카메라 모듈 로드 실패', 'error');
+              return;
+            }
+          }
+          setStatus(`카메라 켜는 중... (엔진: ${engine === 'zxing' ? 'ZXing' : 'html5-qrcode'})`);
 
           try {
-            cameras = await Html5Qrcode.getCameras();
+            // 카메라 목록은 ZXing/h5q 공통으로 navigator.mediaDevices 사용
+            await refreshCameraList();
             if (!cameras || cameras.length === 0) {
               setStatus('사용 가능한 카메라가 없습니다.', 'text-red-600');
               return;
             }
-            // 후면 카메라 우선 선택
-            camIdx = cameras.findIndex(c => /back|rear|environment|환경|후면/i.test(c.label));
-            if (camIdx < 0) camIdx = cameras.length - 1; // 일반적으로 마지막이 후면
-
-            html5Qr = new Html5Qrcode('scanner-reader', { verbose: false });
+            camIdx = cameras.findIndex(c => /back|rear|environment|환경|후면/i.test(c.label || ''));
+            if (camIdx < 0) camIdx = cameras.length - 1;
             await startCurrent();
           } catch (e) {
             console.error(e);
@@ -1039,84 +1073,182 @@
           }
         }
 
-        async function startCurrent() {
-          if (!html5Qr || !cameras[camIdx]) return;
-          const camId = cameras[camIdx].id;
-          // SKU 우선: CODE_128 / CODE_39 / CODE_93 / ITF 등 1D 영문+숫자 포맷 우선 활성화
-          // EAN / UPC 등 순수 숫자 포맷은 의도적으로 제외 (라벨에 EAN과 SKU가 같이 있을 때 SKU 우선 보장)
-          let formats = undefined;
+        async function refreshCameraList() {
           try {
-            if (window.Html5QrcodeSupportedFormats) {
-              const F = window.Html5QrcodeSupportedFormats;
-              formats = [
-                F.CODE_128,
-                F.CODE_39,
-                F.CODE_93,
-                F.ITF,
-                F.CODABAR,
-                F.QR_CODE,
-                F.DATA_MATRIX,
-              ].filter(v => v !== undefined && v !== null);
-            }
-          } catch (_) { /* ignore */ }
+            // 권한 트리거 (라벨 노출용)
+            try {
+              const tmp = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } });
+              tmp.getTracks().forEach(t => t.stop());
+            } catch (_) {}
+            const devs = await navigator.mediaDevices.enumerateDevices();
+            cameras = devs.filter(d => d.kind === 'videoinput').map(d => ({ id: d.deviceId, label: d.label }));
+          } catch (e) {
+            cameras = [];
+            throw e;
+          }
+        }
 
-          // 고해상도 + 연속 자동초점 비디오 제약 (디바이스가 지원하면 적용, 아니면 자동 fallback)
-          const videoConstraints = {
-            facingMode: { ideal: 'environment' },
-            width:  { ideal: 1920 },
-            height: { ideal: 1080 },
-            // @ts-ignore - 일부 브라우저에서 advanced로 동작
+        function buildVideoConstraints(hi) {
+          const cam = cameras[camIdx];
+          const base = cam && cam.id
+            ? { deviceId: { exact: cam.id } }
+            : { facingMode: { ideal: 'environment' } };
+          return {
+            ...base,
+            width:  { ideal: hi ? 1920 : 1280 },
+            height: { ideal: hi ? 1080 : 720 },
             advanced: [
               { focusMode: 'continuous' },
               { focusMode: 'auto' }
             ]
           };
+        }
+
+        async function startCurrent() {
+          // 비디오 컨테이너 표시 초기화
+          const reader = els.reader();
+          if (reader) reader.innerHTML = '';
+
+          if (engine === 'zxing') {
+            await startZxing();
+          } else {
+            await startH5q();
+          }
+
+          const label = (cameras[camIdx] && cameras[camIdx].label) || `카메라 ${camIdx + 1}`;
+          setStatus(`스캔 중 · ${engine === 'zxing' ? 'ZXing' : 'html5-qrcode'} · ${label} — 라벨을 가로로 채우고 10~20cm 거리`, 'text-emerald-600');
+
+          try { await applyTrackControls(); }
+          catch (e) { console.warn('[scanner] 트랙 컨트롤 적용 실패:', e && e.message); }
+        }
+
+        // ====== ZXing 엔진 ======
+        async function startZxing() {
+          const ns = getZxingNS();
+          if (!ns) throw new Error('ZXing 네임스페이스 없음');
+          const Reader = ns.BrowserMultiFormatReader;
+
+          // 허용 포맷: SKU 우선 (1D CODE128/CODE39/CODE93/ITF/CODABAR) + 2D
+          // EAN/UPC 결과는 onDecoded 단계에서 옵션에 따라 무시
+          let hints = null;
+          try {
+            const L = window.ZXing || (ns.ZXing) || ns; // library 네임스페이스가 합쳐진 경우
+            const DecodeHintType = L && L.DecodeHintType;
+            const BarcodeFormat = L && L.BarcodeFormat;
+            if (DecodeHintType && BarcodeFormat) {
+              hints = new Map();
+              hints.set(DecodeHintType.TRY_HARDER, true);
+              const fmts = [
+                BarcodeFormat.CODE_128,
+                BarcodeFormat.CODE_39,
+                BarcodeFormat.CODE_93,
+                BarcodeFormat.ITF,
+                BarcodeFormat.CODABAR,
+                BarcodeFormat.EAN_13,
+                BarcodeFormat.EAN_8,
+                BarcodeFormat.UPC_A,
+                BarcodeFormat.UPC_E,
+                BarcodeFormat.QR_CODE,
+                BarcodeFormat.DATA_MATRIX,
+              ].filter(v => v !== undefined);
+              hints.set(DecodeHintType.POSSIBLE_FORMATS, fmts);
+            }
+          } catch (_) {}
+
+          // 인스턴스 (delayBetweenScanAttempts: 80ms ≈ ~12.5fps 스캔)
+          zxingReader = new Reader(hints, { delayBetweenScanAttempts: 80, delayBetweenScanSuccess: 600 });
+
+          // 비디오 element 직접 삽입 (모달 안에 통일된 레이아웃)
+          const reader = els.reader();
+          const video = document.createElement('video');
+          video.setAttribute('playsinline', 'true');
+          video.setAttribute('muted', 'true');
+          video.style.width = '100%';
+          video.style.height = '100%';
+          video.style.objectFit = 'cover';
+          video.style.background = '#000';
+          reader.style.background = '#000';
+          reader.appendChild(video);
+
+          const constraints = { audio: false, video: buildVideoConstraints(true) };
+          try {
+            zxingControls = await zxingReader.decodeFromConstraints(constraints, video, (result, err) => {
+              if (result) {
+                let fmt = '';
+                try { fmt = (result.getBarcodeFormat && String(result.getBarcodeFormat())) || ''; } catch (_) {}
+                // ZXing 포맷 enum을 사람이 읽는 형태로
+                const fmtName = formatZxingName(fmt);
+                onDecoded(result.getText ? result.getText() : String(result), { result: { format: { formatName: fmtName } } });
+              }
+              // err는 NotFoundException 매 프레임 발생 - 무시
+            });
+          } catch (err) {
+            // 1080p 실패 시 720p 재시도
+            console.warn('[zxing] 1080p 실패, 720p 재시도:', err && err.message);
+            try { zxingReader.reset(); } catch (_) {}
+            const c2 = { audio: false, video: buildVideoConstraints(false) };
+            zxingControls = await zxingReader.decodeFromConstraints(c2, video, (result) => {
+              if (result) {
+                let fmt = '';
+                try { fmt = (result.getBarcodeFormat && String(result.getBarcodeFormat())) || ''; } catch (_) {}
+                const fmtName = formatZxingName(fmt);
+                onDecoded(result.getText ? result.getText() : String(result), { result: { format: { formatName: fmtName } } });
+              }
+            });
+          }
+        }
+
+        function formatZxingName(v) {
+          // ZXing BarcodeFormat enum value or string -> 사람이 읽는 이름
+          if (v == null) return '';
+          const s = String(v);
+          // 숫자(enum index)나 직접 이름 모두 처리
+          const map = {
+            '0':'AZTEC','1':'CODABAR','2':'CODE_39','3':'CODE_93','4':'CODE_128','5':'DATA_MATRIX',
+            '6':'EAN_8','7':'EAN_13','8':'ITF','9':'MAXICODE','10':'PDF_417','11':'QR_CODE',
+            '12':'RSS_14','13':'RSS_EXPANDED','14':'UPC_A','15':'UPC_E','16':'UPC_EAN_EXTENSION'
+          };
+          return map[s] || s;
+        }
+
+        // ====== html5-qrcode 엔진 (폴백) ======
+        async function startH5q() {
+          // h5q는 카메라 id 형식을 deviceId 그대로 받을 수 있음
+          let formats = undefined;
+          try {
+            if (window.Html5QrcodeSupportedFormats) {
+              const F = window.Html5QrcodeSupportedFormats;
+              formats = [F.CODE_128, F.CODE_39, F.CODE_93, F.ITF, F.CODABAR, F.QR_CODE, F.DATA_MATRIX]
+                .filter(v => v !== undefined && v !== null);
+            }
+          } catch (_) {}
 
           const config = {
-            fps: 25, // 스캔 빈도 향상 (작은 1D 바코드 인식률 ↑)
+            fps: 25,
             qrbox: (vw, vh) => {
-              // 가로형 박스를 더 크게 (1D 바코드는 가로로 길다)
               const w = Math.round(Math.min(vw * 0.95, 720));
               const h = Math.round(Math.min(vh * 0.55, 320));
               return { width: w, height: h };
             },
-            aspectRatio: 1.7778, // 16:9
-            disableFlip: true,    // 거울모드 해제 (성능 ↑)
-            videoConstraints,
+            aspectRatio: 1.7778,
+            disableFlip: true,
+            videoConstraints: buildVideoConstraints(true),
             experimentalFeatures: { useBarCodeDetectorIfSupported: true },
           };
-          if (formats && formats.length) {
-            config.formatsToSupport = formats;
-          }
-          try {
-            await html5Qr.start(
-              camId,
-              config,
-              (decodedText, decodedResult) => onDecoded(decodedText, decodedResult),
-              () => { /* per-frame error 무시 */ }
-            );
-          } catch (err) {
-            // 고해상도 실패 시 720p로 fallback
-            console.warn('[scanner] 1080p 실패, 720p로 재시도:', err && err.message);
-            config.videoConstraints = {
-              facingMode: { ideal: 'environment' },
-              width:  { ideal: 1280 },
-              height: { ideal: 720 },
-              advanced: [{ focusMode: 'continuous' }]
-            };
-            await html5Qr.start(camId, config,
-              (t, r) => onDecoded(t, r),
-              () => {}
-            );
-          }
-          const label = cameras[camIdx].label || `카메라 ${camIdx + 1}`;
-          setStatus(`스캔 중... (${label}) — 10~20cm 거리 권장`, 'text-emerald-600');
+          if (formats && formats.length) config.formatsToSupport = formats;
 
-          // 줌/플래시 컨트롤 적용 (지원 시)
+          html5Qr = new Html5Qrcode('scanner-reader', { verbose: false });
+          const camId = cameras[camIdx] && cameras[camIdx].id;
           try {
-            await applyTrackControls();
-          } catch (e) {
-            console.warn('[scanner] 트랙 컨트롤 적용 실패:', e && e.message);
+            await html5Qr.start(camId || { facingMode: { ideal: 'environment' } }, config,
+              (decodedText, decodedResult) => onDecoded(decodedText, decodedResult),
+              () => {});
+          } catch (err) {
+            console.warn('[h5q] 1080p 실패, 720p 재시도:', err && err.message);
+            config.videoConstraints = buildVideoConstraints(false);
+            await html5Qr.start(camId || { facingMode: { ideal: 'environment' } }, config,
+              (t, r) => onDecoded(t, r),
+              () => {});
           }
         }
 
@@ -1317,11 +1449,9 @@
         }
 
         async function switchCamera() {
-          if (!cameras || cameras.length < 2 || !html5Qr) return;
-          try {
-            await html5Qr.stop();
-            html5Qr.clear();
-          } catch (_) {}
+          if (!cameras || cameras.length < 2) return;
+          // 현재 엔진 정지
+          await stopEngineOnly();
           camIdx = (camIdx + 1) % cameras.length;
           setStatus('카메라 전환 중...');
           try {
@@ -1331,17 +1461,39 @@
           }
         }
 
-        async function stop() {
+        async function stopEngineOnly() {
+          // ZXing
+          if (zxingControls) {
+            try { zxingControls.stop && zxingControls.stop(); } catch (_) {}
+            zxingControls = null;
+          }
+          if (zxingReader) {
+            try { zxingReader.reset && zxingReader.reset(); } catch (_) {}
+            zxingReader = null;
+          }
+          // html5-qrcode
           if (html5Qr) {
             try { await html5Qr.stop(); } catch (_) {}
             try { html5Qr.clear(); } catch (_) {}
             html5Qr = null;
           }
+          // video element 정리 (ZXing은 우리가 직접 만든 video)
+          const reader = els.reader();
+          if (reader) {
+            const v = reader.querySelector('video');
+            if (v && v.srcObject) {
+              try { v.srcObject.getTracks().forEach(t => t.stop()); } catch (_) {}
+              try { v.srcObject = null; } catch (_) {}
+            }
+          }
+        }
+
+        async function stop() {
+          await stopEngineOnly();
           els.modal().classList.add('hidden');
           isOpen = false;
           hideLast();
           hideCandidate();
-          // 컨트롤 영역 초기화
           const ctrl = els.controls();
           if (ctrl) ctrl.classList.add('hidden');
           torchOn = false;

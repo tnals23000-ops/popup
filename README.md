@@ -3,7 +3,7 @@
 팝업 스토어 재고 로케이션 매칭 웹사이트 (Express + SQLite + Vanilla JS)
 
 ## 주요 기능
-- 📷 카메라 바코드 스캔 (고감도): 고해상도(1080p) + 연속 자동초점 + qrbox 확대 + FPS 25로 작은 의류 라벨 CODE128 SKU 인식률 향상. 줌/플래시(토치) 자동 노출, EAN/UPC 무시 옵션, 2회 확인 모드, 후보 수동 확정 버튼. 다중 CDN 폴백 / HTTPS 환경 필수
+- 📷 카메라 바코드 스캔 (듀얼 엔진): **ZXing(@zxing/browser) 우선 + html5-qrcode 폴백**. ZXing의 강력한 CODE128 1D 디코더 + TRY_HARDER 힌트로 작은 의류 라벨 인식률 대폭 향상. 고해상도(1080p→720p fallback) + 연속 자동초점 + 줌/플래시(토치) 자동 노출, EAN/UPC 무시 옵션, 2회 확인 모드, 후보 수동 확정 버튼. 다중 CDN 폴백 / HTTPS 환경 필수
   - SKU(CODE128/CODE39 등 영문+숫자) 우선 인식
   - EAN-13 / UPC 등 숫자 전용 소매 바코드는 기본 무시 (모달 토글로 해제 가능)
   - html5-qrcode 다중 CDN 폴백(unpkg → jsdelivr → cdnjs), HTTPS 환경 필수
