@@ -1,0 +1,14 @@
+node_modules/
+*.log
+.env
+.DS_Store
+
+# SQLite 임시 파일 (popup.db 본체는 커밋 포함)
+popup.db-wal
+popup.db-shm
+popup.db.backup_*
+
+# OS/IDE
+.vscode/
+.idea/
+Thumbs.db
