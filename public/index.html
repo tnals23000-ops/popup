@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>팝업 재고 관리</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/html5-qrcode@2.3.10/html5-qrcode.min.js"></script>
+  <!-- html5-qrcode는 클릭 시점에 다중 CDN 폴백으로 동적 로드됩니다 -->
   <style>
     body { font-family: Arial, "Noto Sans KR", sans-serif; }
     .btn-touch { min-height: 48px; font-size: 16px; }
@@ -896,12 +896,73 @@
           if (l) l.classList.add('hidden');
         }
 
+        // 다중 CDN 폴백으로 html5-qrcode 동적 로드
+        const SCANNER_CDNS = [
+          'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.10/html5-qrcode.min.js',
+          'https://unpkg.com/html5-qrcode@2.3.10/html5-qrcode.min.js',
+          'https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js'
+        ];
+        let scannerLoadPromise = null;
+        function loadScript(url, timeoutMs) {
+          return new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = url;
+            s.async = true;
+            let done = false;
+            const finish = (ok, err) => {
+              if (done) return;
+              done = true;
+              clearTimeout(tid);
+              if (ok) resolve(); else reject(err || new Error('load fail'));
+            };
+            s.onload = () => finish(true);
+            s.onerror = () => finish(false, new Error('onerror: ' + url));
+            const tid = setTimeout(() => {
+              try { s.remove(); } catch (_) {}
+              finish(false, new Error('timeout: ' + url));
+            }, timeoutMs || 8000);
+            document.head.appendChild(s);
+          });
+        }
+        async function ensureScannerLoaded() {
+          if (window.Html5Qrcode) return true;
+          if (scannerLoadPromise) return scannerLoadPromise;
+          scannerLoadPromise = (async () => {
+            let lastErr = null;
+            for (const url of SCANNER_CDNS) {
+              try {
+                console.log('[scanner] try', url);
+                await loadScript(url, 8000);
+                if (window.Html5Qrcode) return true;
+              } catch (e) {
+                console.warn('[scanner] fail', url, e && e.message);
+                lastErr = e;
+              }
+            }
+            scannerLoadPromise = null; // 다음 클릭에 재시도 가능
+            throw lastErr || new Error('all CDNs failed');
+          })();
+          return scannerLoadPromise;
+        }
+
         async function start(inputId, act) {
-          if (!window.Html5Qrcode) {
-            showToast('카메라 모듈을 불러오지 못했습니다.', 'error');
-            return;
-          }
           if (isOpen) return;
+          if (!window.Html5Qrcode) {
+            // 모달 먼저 띄우고 로딩 상태 표시
+            targetInputId = inputId;
+            action = act;
+            els.modal().classList.remove('hidden');
+            isOpen = true;
+            setStatus('카메라 모듈 로드 중... (CDN)');
+            try {
+              await ensureScannerLoaded();
+            } catch (e) {
+              console.error('[scanner] load error', e);
+              setStatus('카메라 모듈을 불러오지 못했습니다. 네트워크 또는 광고 차단 확인 후 다시 시도해 주세요.', 'text-red-600');
+              showToast('카메라 모듈 로드 실패 — 잠시 후 다시 시도해 주세요.', 'error');
+              return;
+            }
+          }
           targetInputId = inputId;
           action = act;
           lastCode = null;
